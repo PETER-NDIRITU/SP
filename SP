@@ -1,0 +1,80 @@
+// Map.addLayer(roi)
+Map.centerObject(roi,12)
+
+var roi_2023 = ee.ImageCollection("COPERNICUS/S2")
+    .filterDate('2023-01-01' , '2023-12-31')
+    .filterBounds(roi)
+    .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 5))
+    .median()
+    .clip(roi)
+    
+var bands = ['B4', 'B3', 'B2']
+var image = roi_2023.select(bands);
+Map.addLayer(roi_2023, imageVisParam, '2020 ROI')
+
+//Lets now define the number of the clasees we want for our classification;
+var classes =  builtup.merge(cropland).merge(forest).merge(bareland).merge(waterbody);
+
+//Assemble samples for the model
+
+var samples = image.sampleRegions({
+  collection: classes,
+  properties: ['landcover'], 
+  scale: 30 
+  }).randomColumn('random');
+  
+  
+// Roughly 75% for training, 25% for testing.
+var split = 0.75;
+var training = samples.filter(ee.Filter.lt('random', split)); 
+var testing = samples.filter(ee.Filter.gte('random', split));
+
+// Use Random Forest 
+var classifier = ee.Classifier.smileRandomForest(5).train({ 
+  features: training.select(['B4', 'B3', 'B2','landcover']),
+  classProperty: 'landcover',
+  inputProperties: bands
+  });
+print(classifier.explain());
+
+var validation = testing.classify(classifier);
+var testAccuracy = validation.errorMatrix('landcover', 'classification');
+print('Validation error matrix RF: ', testAccuracy);
+print('Validation overall accuracy RF: ', testAccuracy.accuracy());
+
+
+
+var classified = image.select(bands) // select the predictors
+                    .classify(classifier)
+                    .clip(roi);
+                    
+var palette =  ['#fa0000','#f096ff','#006400','#b4b4b4','#0064c8','#006400']
+
+Map.addLayer (classified, {min: 0, max: 7,
+      palette: palette}, 'classified')
+    
+// Export the beforeClassified image
+Export.image.toDrive({
+  image: classified.visualize({ min:0, max:7, palette: ['#fa0000','#f096ff','#006400','#b4b4b4','#0064c8','#006400']}),
+  description: 'LULC',
+  folder: 'NYERI_TOWN',
+  fileNamePrefix: 'LULC',
+  region: roi,
+  scale: 10,
+  maxPixels: 1e13,
+  // crs:"EPSG:21037"
+});
+
+
+Export.image.toDrive({
+  image:roi_2023.select(['B1','B2','B3','B4','B5','B7']),
+  description:'Sat_Image',
+  folder:'NYERI_TOWN',
+  scale:30,
+  region:roi,
+  // fileDimensions:7680,
+  maxPixels:1e13,
+  crs:"EPSG:21037"
+});
+
+
